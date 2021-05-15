@@ -29,8 +29,11 @@
  */
 package net.sf.jsignpdf.preview;
 
+import java.awt.AWTException;
+import java.awt.Cursor;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.HeadlessException;
 import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.event.ComponentAdapter;
@@ -42,156 +45,197 @@ import java.awt.image.BufferedImage;
 
 import javax.swing.JPanel;
 
+import org.apache.log4j.Logger;
+
 import net.sf.jsignpdf.types.RelRect;
+import net.sf.jsignpdf.types.RelRect.ResizeDirection;
 
 /**
  * Resizeable image component with rectangle selection implementation. It
  * extends {@link JPanel} component and draws itself on the panel surface.
- * 
+ *
  * @author Josef Cacek
  */
 public class SelectionImage extends JPanel {
 
-	private static final long serialVersionUID = 1L;
-
-	private BufferedImage image = null;
-	private BufferedImage originalImage = null;
-	private int offsetX, offsetY;
-
-	private RelRect relRect = new RelRect();
-
-	private Point currentPoint;
-
 	/**
-	 * Mouse adapter which stores current position of mouse and stores
-	 * selection.
-	 * 
+	 * Mouse adapter which stores current position of mouse and stores selection.
+	 *
 	 * @author Josef Cacek
 	 */
 	class SelMouseAdapter extends MouseAdapter implements MouseMotionListener {
 
-		private int btnCode;
+		private final int btnCode;
 		private boolean btnPressed = false;
+		private RelRect.ResizeDirection resize = ResizeDirection.NONE;
+		private boolean move = false;
 
-		public SelMouseAdapter(int aBtnCode) {
+		public SelMouseAdapter(final int aBtnCode) {
 			btnCode = aBtnCode;
 		}
 
+		private boolean cursorAboveImage(final Point point) {
+			return offsetX <= point.x && point.x <= offsetX + image.getWidth() && offsetY <= point.y
+					&& point.y <= offsetY + image.getHeight();
+		}
+
 		@Override
-		public void mousePressed(MouseEvent e) {
-			if (e.getButton() != btnCode)
-				return;
-			btnPressed = true;
+		public void mouseDragged(final MouseEvent e) {
 			final Point point = e.getPoint();
+			if (!btnPressed || !cursorAboveImage(point)) {
+				return;
+			}
 			final Point imgRelPoint = new Point(point.x - offsetX, point.y - offsetY);
-			relRect.setStartPoint(imgRelPoint);
-			relRect.setEndPoint(imgRelPoint);
+			if (move) {
+				relRect.move(imgRelPoint);
+			} else if (resize != ResizeDirection.NONE) {
+				relRect.resize(imgRelPoint, resize);
+			} else {
+				relRect.setEndPoint(imgRelPoint);
+			}
 			repaint();
 		}
 
 		@Override
-		public void mouseDragged(MouseEvent e) {
-			currentPoint = e.getPoint();
-			if (!btnPressed)
-				return;
+		public void mouseMoved(final MouseEvent e) {
 			final Point point = e.getPoint();
-			relRect.setEndPoint(new Point(point.x - offsetX, point.y - offsetY));
+
+			if (!cursorAboveImage(point)) {
+				try {
+					setCursor(Cursor.getSystemCustomCursor("Invalid.32x32"));
+				} catch (final HeadlessException | AWTException e1) {
+					LOGGER.error(e1);
+				}
+				return;
+			}
+
+			final Point imgRelPoint = new Point(point.x - offsetX, point.y - offsetY);
+			if (relRect.pointInside(imgRelPoint)) {
+				final Point startPoint = relRect.getP1();
+				final Point endPoint = relRect.getP2();
+				if (startPoint.equals(imgRelPoint)) {
+					setCursor(Cursor.NW_RESIZE_CURSOR);
+				} else if (endPoint.equals(imgRelPoint)) {
+					setCursor(Cursor.SE_RESIZE_CURSOR);
+				} else if (startPoint.x == imgRelPoint.x) {
+					setCursor(Cursor.W_RESIZE_CURSOR);
+				} else if (startPoint.y == imgRelPoint.y) {
+					setCursor(Cursor.N_RESIZE_CURSOR);
+				} else if (endPoint.x == imgRelPoint.x) {
+					setCursor(Cursor.E_RESIZE_CURSOR);
+				} else if (endPoint.y == imgRelPoint.y) {
+					setCursor(Cursor.S_RESIZE_CURSOR);
+				} else {
+					setCursor(Cursor.MOVE_CURSOR);
+				}
+			} else {
+				setCursor(Cursor.CROSSHAIR_CURSOR);
+			}
+		}
+
+		@Override
+		public void mousePressed(final MouseEvent e) {
+			final Point point = e.getPoint();
+			if (e.getButton() != btnCode || !cursorAboveImage(point)) {
+				return;
+			}
+			btnPressed = true;
+			final Point imgRelPoint = new Point(point.x - offsetX, point.y - offsetY);
+			if (relRect.pointInside(imgRelPoint)) {
+				resize = relRect.pointOnEdge(imgRelPoint);
+				if (resize == ResizeDirection.NONE) {
+					move = true;
+					relRect.move(imgRelPoint);
+				} else {
+					relRect.resize(imgRelPoint, resize);
+				}
+			} else {
+				relRect.setStartPoint(imgRelPoint);
+				relRect.setEndPoint(imgRelPoint);
+			}
 			repaint();
 		}
 
 		@Override
-		public void mouseMoved(MouseEvent e) {
-			currentPoint = e.getPoint();
-		}
-
-		@Override
-		public void mouseReleased(MouseEvent e) {
-			if (e.getButton() != btnCode || !btnPressed)
+		public void mouseReleased(final MouseEvent e) {
+			final Point point = e.getPoint();
+			if (e.getButton() != btnCode || !btnPressed || !cursorAboveImage(point)) {
 				return;
+			}
 			btnPressed = false;
-			final Point point = e.getPoint();
-			relRect.setEndPoint(new Point(point.x - offsetX, point.y - offsetY));
+			final Point imgRelPoint = new Point(point.x - offsetX, point.y - offsetY);
+			if (move) {
+				move = false;
+				relRect.move(imgRelPoint);
+			} else if (resize != ResizeDirection.NONE) {
+				relRect.resize(imgRelPoint, resize);
+				resize = ResizeDirection.NONE;
+			} else {
+				relRect.setEndPoint(imgRelPoint);
+			}
 			repaint();
 		}
 
 	}
+
+	private static final long serialVersionUID = 1L;
+
+	/**
+	 * Resizes given image to new dimension. It doesn't break original proportions.
+	 *
+	 * @param aImg    image to resize
+	 * @param aWidth  new image width
+	 * @param aHeight new image height
+	 * @return resized image
+	 */
+	private static BufferedImage resize(final BufferedImage aImg, int aWidth, int aHeight) {
+		if (aWidth < 1) {
+			aWidth = 1;
+		}
+		if (aHeight < 1) {
+			aHeight = 1;
+		}
+
+		final int w = aImg.getWidth();
+		final int h = aImg.getHeight();
+		final float rel = Math.min((float) aWidth / w, (float) aHeight / h);
+
+		final BufferedImage dimg = new BufferedImage(Math.round(w * rel), Math.round(h * rel), aImg.getType());
+		final Graphics2D g = dimg.createGraphics();
+		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+		g.drawImage(aImg, 0, 0, dimg.getWidth(), dimg.getHeight(), 0, 0, w, h, null);
+		g.dispose();
+		return dimg;
+	}
+
+	private transient BufferedImage image = null;
+
+	private transient BufferedImage originalImage = null;
+
+	private int offsetX;
+	private int offsetY;
+
+	private final RelRect relRect = new RelRect();
+
+	private Point currentPoint;
+
+	private final Logger LOGGER = Logger.getLogger(SelectionImage.class);
 
 	/**
 	 * Default constructor.
 	 */
 	public SelectionImage() {
-		SelMouseAdapter tmpMouseAdapter = new SelMouseAdapter(MouseEvent.BUTTON1);
+		final SelMouseAdapter tmpMouseAdapter = new SelMouseAdapter(MouseEvent.BUTTON1);
 		addMouseListener(tmpMouseAdapter);
 		addMouseMotionListener(tmpMouseAdapter);
 		addComponentListener(new ComponentAdapter() {
 
 			@Override
-			public void componentResized(ComponentEvent e) {
+			public void componentResized(final ComponentEvent e) {
 				createResizedImage();
 			}
 
 		});
-	}
-
-	/**
-	 * Returns last mouse position
-	 * 
-	 * @return the currentPoint
-	 */
-	public Point getCurrentPoint() {
-		return currentPoint;
-	}
-
-	/*
-	 * (non-Javadoc)
-	 *
-	 * @see java.awt.Component#paint(java.awt.Graphics)
-	 */
-	@Override
-	public void paintComponent(Graphics g) {
-		super.paintComponent(g);
-		if (image != null) {
-			g.drawImage(image, offsetX, offsetY, null);
-			if (relRect.isValid()) {
-				// Page (without rotation) 600x400: [50,100; 150,130]
-				// rot 0: [50, 400-100, 150, 400-130]
-				// rot 1 (90deg): [ 100, 50, 130, 150]
-				// rot 2 (180deg): [ 600 - 50, 100, 600-150, 130]
-				// rot 3 (270deg): [ 400 - 100, 600 - 150, 400 - 130, 600 - 150 ]
-				int[] p1 = relRect.getP1();
-				int[] p2 = relRect.getP2();
-				g.drawRect(Math.min(p1[0], p2[0]) + offsetX, Math.min(p1[1], p2[1]) + offsetY, Math.abs(p2[0] - p1[0]),
-						Math.abs(p2[1] - p1[1]));
-			}
-		}
-	}
-
-	/**
-	 * Sets original image
-	 * 
-	 * @param image
-	 */
-	public void setImage(BufferedImage image) {
-		this.originalImage = image;
-		createResizedImage();
-	}
-
-	/**
-	 * Returns original image
-	 * 
-	 * @return
-	 */
-	public BufferedImage getImage() {
-		return originalImage;
-	}
-
-	/**
-	 * Returns true if image is set and selection is made
-	 * 
-	 * @return
-	 */
-	public boolean isValidPosition() {
-		return image != null && relRect != null;
 	}
 
 	/**
@@ -210,37 +254,63 @@ public class SelectionImage extends JPanel {
 	}
 
 	/**
-	 * Resizes given image to new dimension. It doesn't break original
-	 * proportions.
-	 * 
-	 * @param aImg
-	 *            image to resize
-	 * @param aWidth
-	 *            new image width
-	 * @param aHeight
-	 *            new image height
-	 * @return resized image
+	 * Returns last mouse position
+	 *
+	 * @return the currentPoint
 	 */
-	private static BufferedImage resize(BufferedImage aImg, int aWidth, int aHeight) {
-		if (aWidth < 1)
-			aWidth = 1;
-		if (aHeight < 1)
-			aHeight = 1;
-
-		int w = aImg.getWidth();
-		int h = aImg.getHeight();
-		float rel = Math.min(((float) aWidth) / w, ((float) aHeight) / h);
-
-		BufferedImage dimg = new BufferedImage(Math.round(w * rel), Math.round(h * rel), aImg.getType());
-		Graphics2D g = dimg.createGraphics();
-		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-		g.drawImage(aImg, 0, 0, dimg.getWidth(), dimg.getHeight(), 0, 0, w, h, null);
-		g.dispose();
-		return dimg;
+	public Point getCurrentPoint() {
+		return currentPoint;
 	}
 
 	public RelRect getRelRect() {
 		return relRect;
+	}
+
+	/**
+	 * Returns true if image is set and selection is made
+	 *
+	 * @return
+	 */
+	public boolean isValidPosition() {
+		return image != null && relRect != null;
+	}
+
+	/*
+	 * (non-Javadoc)
+	 *
+	 * @see java.awt.Component#paint(java.awt.Graphics)
+	 */
+	@Override
+	public void paintComponent(final Graphics g) {
+		super.paintComponent(g);
+		if (image != null) {
+			g.drawImage(image, offsetX, offsetY, null);
+			if (relRect.isValid()) {
+				// Page (without rotation) 600x400: [50,100; 150,130]
+				// rot 0: [50, 400-100, 150, 400-130]
+				// rot 1 (90deg): [ 100, 50, 130, 150]
+				// rot 2 (180deg): [ 600 - 50, 100, 600-150, 130]
+				// rot 3 (270deg): [ 400 - 100, 600 - 150, 400 - 130, 600 - 150 ]
+				final Point p1 = relRect.getP1();
+				final Point p2 = relRect.getP2();
+				g.drawRect(Math.min(p1.x, p2.x) + offsetX, Math.min(p1.y, p2.y) + offsetY, Math.abs(p2.x - p1.x),
+						Math.abs(p2.y - p1.y));
+			}
+		}
+	}
+
+	public void setCursor(final int cursor) {
+		setCursor(new Cursor(cursor));
+	}
+
+	/**
+	 * Sets original image
+	 *
+	 * @param image
+	 */
+	public void setImage(final BufferedImage image) {
+		originalImage = image;
+		createResizedImage();
 	}
 
 }

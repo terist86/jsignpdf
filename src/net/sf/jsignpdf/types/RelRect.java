@@ -32,70 +32,55 @@ package net.sf.jsignpdf.types;
 import java.awt.Dimension;
 import java.awt.Point;
 import java.beans.PropertyChangeListener;
+import java.io.Serializable;
 import java.util.Arrays;
 
 import net.sf.jsignpdf.preview.FinalPropertyChangeSupport;
 
 /**
  * Rectangle implementation based on relative positions.
- * 
+ *
  * @author Josef Cacek
  */
-public class RelRect {
+public class RelRect implements Serializable {
+
+	public enum ResizeDirection {
+		N,
+		NE,
+		E,
+		SE,
+		S,
+		SW,
+		W,
+		NW,
+		NONE
+	}
+
+	/**
+	 *
+	 */
+	private static final long serialVersionUID = 1L;
 
 	public static final String PROPERTY_COORDS = "coords";
-
 	private final Float[] coords = new Float[] { 0f, 0f, 1f, 1f };
-	private Dimension imageSize = new Dimension(1, 1);
 
-	private FinalPropertyChangeSupport pcs = new FinalPropertyChangeSupport(this);
+	private final Dimension imageSize = new Dimension(1, 1);
 
-	/**
-	 * Return if the rectangle is valid (i.e. both startPoint and endPoint are
-	 * set correctly)
-	 * 
-	 * @return true if valid, false otherwise
-	 */
-	public boolean isValid() {
-		for (Float tmpCoord : coords) {
-			if (tmpCoord == null)
-				return false;
-		}
-		return true;
-	}
+	private final FinalPropertyChangeSupport pcs = new FinalPropertyChangeSupport(this);
 
 	/**
-	 * Returns startPoint coordinates in the image.
-	 * 
-	 * @return
+	 * Adds propertyChangeListener for this bean
+	 *
+	 * @param listener
 	 */
-	public int[] getP1() {
-		return makeImgPoint(0);
-	}
-
-	/**
-	 * Returns endPoint coordinates in the image.
-	 * 
-	 * @return
-	 */
-	public int[] getP2() {
-		return makeImgPoint(2);
-	}
-
-	/**
-	 * Sets the start Point
-	 * 
-	 * @param aPoint
-	 *            the startPoint to set
-	 */
-	public void setStartPoint(Point aPoint) {
-		setRelPoint(aPoint, 0);
+	public void addPropertyChangeListener(final PropertyChangeListener listener) {
+		pcs.addPropertyChangeListener(listener);
 	}
 
 	/**
 	 * Returns relative coordinates of the startPoint [x1,y1] and endPoint
 	 * [x2,y2] as Float array [x1,y1,x2,y2]
-	 * 
+	 *
 	 * @return
 	 */
 	public Float[] getCoords() {
@@ -103,72 +88,193 @@ public class RelRect {
 	}
 
 	/**
+	 * Returns startPoint coordinates in the image.
+	 *
+	 * @return
+	 */
+	public Point getP1() {
+		return makeImgPoint(0);
+	}
+
+	/**
+	 * Returns endPoint coordinates in the image.
+	 *
+	 * @return
+	 */
+	public Point getP2() {
+		return makeImgPoint(2);
+	}
+
+	/**
+	 * Return if the rectangle is valid (i.e. both startPoint and endPoint are
+	 * set correctly)
+	 *
+	 * @return true if valid, false otherwise
+	 */
+	public boolean isValid() {
+		for (final Float tmpCoord : coords) {
+			if (tmpCoord == null) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Calculates point in the image.
+	 *
+	 * @param coordsOffset
+	 *            use 0 for startPoint and 2 for endPoint.
+	 * @return coordinates [x,y] of a point in the image
+	 */
+	private Point makeImgPoint(final int coordsOffset) {
+		final int x = Math.round(coords[coordsOffset] * imageSize.width);
+		final int y = imageSize.height - Math.round(coords[coordsOffset + 1] * imageSize.height);
+		return new Point(x, y);
+	}
+
+	public void move(final Point center) {
+		final Point p1 = getP1();
+		final Point p2 = getP2();
+		final int h = p2.y - p1.y;
+		final int w = p2.x - p1.x;
+
+		p1.x = center.x - w / 2;
+		p1.y = center.y - h / 2;
+
+		p2.x = p1.x + w;
+		p2.y = p1.y + h;
+
+		setStartPoint(p1);
+		setEndPoint(p2);
+	}
+
+	public boolean pointInside(final Point point) {
+		final Point p1 = getP1();
+		final Point p2 = getP2();
+		return p1.x <= point.x && p1.y <= point.y && point.x <= p2.x && point.y <= p2.y;
+	}
+
+	public ResizeDirection pointOnEdge(final Point point) {
+		final Point p1 = getP1();
+		final Point p2 = getP2();
+		if (point.equals(p1)) {
+			return ResizeDirection.NW;
+		}
+		if (point.equals(p2)) {
+			return ResizeDirection.SE;
+		}
+		if (point.y == p1.y) {
+			if (point.x == p2.x) {
+				return ResizeDirection.NE;
+			}
+			return ResizeDirection.N;
+		}
+		if (point.y == p2.y) {
+			if (point.x == p1.x) {
+				return ResizeDirection.SW;
+			}
+			return ResizeDirection.S;
+		}
+		if (point.x == p1.x) {
+			return ResizeDirection.W;
+		}
+		if (point.x == p2.x) {
+			return ResizeDirection.E;
+		}
+		return ResizeDirection.NONE;
+	}
+
+	/**
+	 * Removes propertyChangeListener from this bean
+	 *
+	 * @param listener
+	 */
+	public void removePropertyChangeListener(final PropertyChangeListener listener) {
+		pcs.removePropertyChangeListener(listener);
+	}
+
+	public void resize(final Point point, final ResizeDirection resizeDirection) {
+		final Point p1 = getP1();
+		final Point p2 = getP2();
+		switch (resizeDirection) {
+		case N:
+			p1.y = point.y;
+			setStartPoint(p1);
+			break;
+		case NE:
+			p1.y = point.y;
+			setStartPoint(p1);
+			p2.x = point.x;
+			setEndPoint(p2);
+			break;
+		case E:
+			p2.x = point.x;
+			setEndPoint(p2);
+			break;
+		case SE:
+			setEndPoint(point);
+			break;
+		case S:
+			p2.y = point.y;
+			setEndPoint(p2);
+			break;
+		case SW:
+			p1.x = point.x;
+			setStartPoint(p1);
+			p2.y = point.y;
+			setEndPoint(p2);
+			break;
+		case W:
+			p1.x = point.x;
+			setStartPoint(p1);
+			break;
+		case NW:
+			setStartPoint(point);
+			break;
+		case NONE:
+			break;
+		default:
+			break;
+		}
+	}
+
+	/**
 	 * Sets the end Point
-	 * 
+	 *
 	 * @param aPoint
 	 *            the endPoint to set
 	 */
-	public void setEndPoint(Point aPoint) {
+	public void setEndPoint(final Point aPoint) {
 		setRelPoint(aPoint, 2);
 	}
 
 	/**
 	 * Sets new dimension. Minimal values for both sizes (width, height) are
 	 * [1,1]
-	 * 
+	 *
 	 * @param newWidth
 	 * @param newHeight
 	 */
 	public void setImgSize(int newWidth, int newHeight) {
-		if (newWidth < 1)
+		if (newWidth < 1) {
 			newWidth = 1;
-		if (newHeight < 1)
+		}
+		if (newHeight < 1) {
 			newHeight = 1;
+		}
 
 		imageSize.setSize(newWidth, newHeight);
 	}
 
 	/**
-	 * Adds propertyChangeListener for this bean
-	 * 
-	 * @param listener
+	 * Sets coordinates of a relative point (startPoint or endPoint) based on given
+	 * Point in the image.
+	 *
+	 * @param point  point with coordinates in the image
+	 * @param offset use 0 for startPoint and 2 for endPoint.
 	 */
-	public void addPropertyChangeListener(PropertyChangeListener listener) {
-		this.pcs.addPropertyChangeListener(listener);
-	}
-
-	/**
-	 * Removes propertyChangeListener from this bean
-	 * 
-	 * @param listener
-	 */
-	public void removePropertyChangeListener(PropertyChangeListener listener) {
-		this.pcs.removePropertyChangeListener(listener);
-	}
-
-	/**
-	 * Calculates point in the image.
-	 * 
-	 * @param coordsOffset
-	 *            use 0 for startPoint and 2 for endPoint.
-	 * @return coordinates [x,y] of a point in the image
-	 */
-	private int[] makeImgPoint(int coordsOffset) {
-		int x = Math.round(coords[coordsOffset] * imageSize.width);
-		int y = imageSize.height - Math.round(coords[coordsOffset + 1] * imageSize.height);
-		return new int[] { x, y };
-	}
-
-	/**
-	 * Sets coordinates of a relative point (startPoint or endPoint) based on
-	 * given Point in the image.
-	 * 
-	 * @param point
-	 *            point with coordinates in the image
-	 * @param offset
-	 *            use 0 for startPoint and 2 for endPoint.
-	 */
-	private void setRelPoint(Point point, int offset) {
+	private void setRelPoint(final Point point, final int offset) {
 		final Float[] oldVal = Arrays.copyOf(coords, coords.length);
 		if (point == null) {
 			coords[offset] = null;
@@ -178,6 +284,15 @@ public class RelRect {
 			coords[offset + 1] = 1f - (float) point.y / imageSize.height;
 		}
 		pcs.firePropertyChange(PROPERTY_COORDS, oldVal, coords);
+	}
+
+	/**
+	 * Sets the start Point
+	 *
+	 * @param aPoint the startPoint to set
+	 */
+	public void setStartPoint(final Point aPoint) {
+		setRelPoint(aPoint, 0);
 	}
 
 }
